@@ -1,0 +1,144 @@
+version: '3.8'
+
+services:
+  # --- Core Infrastructure ---
+  
+  ollama:
+    image: ollama/ollama:latest
+    container_name: gare-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - gare-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:alpine
+    container_name: gare-redis
+    ports:
+      - "6380:6379" # Using 6380 as per project standards
+    networks:
+      - gare-network
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:latest
+    container_name: gare-neo4j
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=neo4j/password
+    volumes:
+      - neo4j_data:/data
+    networks:
+      - gare-network
+    restart: unless-stopped
+
+  # --- Project 02: Memória RAG (Redis) ---
+  prj-02-api:
+    build:
+      context: ../..
+      dockerfile: DEV/PRJ-09_Deploy_Cloud/docker/Dockerfile
+    container_name: gare-prj02-api
+    working_dir: /app/DEV/PRJ-02_Memoria_RAG
+    volumes:
+      - ../..:/app
+    ports:
+      - "8002:8000"
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - ollama
+      - redis
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000
+    networks:
+      - gare-network
+
+  prj-02-ui:
+    build:
+      context: ../..
+      dockerfile: DEV/PRJ-09_Deploy_Cloud/docker/Dockerfile
+    container_name: gare-prj02-ui
+    working_dir: /app/DEV/PRJ-02_Memoria_RAG
+    volumes:
+      - ../..:/app
+    ports:
+      - "8502:8502"
+    environment:
+      - API_URL=http://prj-02-api:8000
+    depends_on:
+      - prj-02-api
+    command: streamlit run frontend/streamlit_app.py --server.port 8502 --server.address 0.0.0.0
+    networks:
+      - gare-network
+
+  # --- Project 03: Agentic RAG ---
+  prj-03-api:
+    build:
+      context: ../..
+      dockerfile: DEV/PRJ-09_Deploy_Cloud/docker/Dockerfile
+    container_name: gare-prj03-api
+    working_dir: /app/DEV/PRJ-03_Agentic_RAG
+    volumes:
+      - ../..:/app
+    ports:
+      - "8003:8000"
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    depends_on:
+      - ollama
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000
+    networks:
+      - gare-network
+
+  # --- Project 06: GraphRAG (Neo4j) ---
+  prj-06-api:
+    build:
+      context: ../..
+      dockerfile: DEV/PRJ-09_Deploy_Cloud/docker/Dockerfile
+    container_name: gare-prj06-api
+    working_dir: /app/DEV/PRJ-06_GraphRAG
+    volumes:
+      - ../..:/app
+    ports:
+      - "8006:8000"
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
+    depends_on:
+      - ollama
+      - neo4j
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000
+    networks:
+      - gare-network
+
+  # --- Portal GIULIA AI ---
+  portal:
+    build:
+      context: ../..
+      dockerfile: DEV/PRJ-09_Deploy_Cloud/docker/Dockerfile
+    container_name: gare-portal
+    working_dir: /app/DEV/PRJ-09_Deploy_Cloud/portal
+    volumes:
+      - ../..:/app
+    ports:
+      - "8500:8500"
+    command: streamlit run portal_app.py --server.port 8500 --server.address 0.0.0.0
+    networks:
+      - gare-network
+
+networks:
+  gare-network:
+    driver: bridge
+
+volumes:
+  ollama_data:
+  neo4j_data:
+  redis_data:
