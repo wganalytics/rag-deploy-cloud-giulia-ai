@@ -1,5 +1,14 @@
 # PRJ-09 — Deploy Cloud: Orquestração do Ecossistema RAG
 
+> **Este repositório não roda sozinho.** Ele é um componente do monorepo
+> `giulia-ai-engineering-ecosystem` — o `docker-compose.yml` monta a raiz do
+> monorepo inteiro como volume (`../../..:/app`) e builda uma imagem
+> compartilhada para os PRJ-01 a PRJ-08, que vivem em repositórios irmãos
+> ([lista completa](https://github.com/wganalytics?tab=repositories&q=rag-)),
+> não neste clone. Use este README como documentação de arquitetura e das
+> decisões de engenharia por trás da orquestração — para executar de fato,
+> é preciso o monorepo completo com os nove projetos lado a lado.
+
 Camada de infraestrutura e orquestração do ecossistema Giulia AI. Não implementa
 mais uma técnica de RAG — sobe as oito implementações anteriores (PRJ-01 a
 PRJ-08), a infraestrutura compartilhada (Redis, Neo4j com APOC) e um portal de
