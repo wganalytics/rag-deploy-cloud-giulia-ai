@@ -1,0 +1,53 @@
+# Dependências consolidadas dos PRJ-01..PRJ-08.
+#
+# Uma única imagem serve todos os projetos: o código vem por volume, então
+# só as bibliotecas precisam estar na imagem. Manter um arquivo aqui evita
+# reconstruir oito imagens quase idênticas.
+#
+# NÃO usar o requirements.txt da raiz do monorepo: ele fixa langchain==0.2.14,
+# incompatível com a linha 0.3.x usada pelos projetos.
+
+# --- LangChain (linha 0.3.x) ---
+# langchain-core PRECISA ficar abaixo de 1.0: a versão 1.x removeu
+# langchain_core.memory, que o langchain-neo4j ainda importa. Subir isso
+# quebra o PRJ-06 na importação.
+langchain>=0.3.0
+langchain-core>=0.3.0,<1.0
+langchain-community>=0.3.0
+langchain-text-splitters>=0.3.0
+langchain-experimental>=0.3.0
+
+# --- Providers de LLM ---
+# xai e groq 1.x exigem langchain-core 1.x: mesmo motivo do pin acima.
+langchain-ollama>=0.3.0
+langchain-google-genai>=2.0.0
+langchain-xai<1.0
+langchain-groq<1.0
+
+# --- Bancos e recuperação ---
+chromadb>=0.5.0
+langchain-chroma>=0.1.4
+langchain-neo4j>=0.5.0
+neo4j>=5.28.0
+redis>=5.0.0
+rank_bm25>=0.2.2
+sentence-transformers>=3.0.0
+
+# --- Documentos ---
+PyMuPDF>=1.24.0
+pypdf>=4.3.0
+
+# --- API e UI ---
+fastapi>=0.110.0
+uvicorn>=0.30.0
+python-multipart>=0.0.9
+streamlit>=1.37.0
+requests>=2.32.0
+httpx>=0.27.0
+
+# --- Utilidades ---
+python-dotenv>=1.0.0
+pydantic>=2.8.0
+numexpr>=2.8.0
+duckduckgo-search>=6.0.0
+ddgs>=0.9.0

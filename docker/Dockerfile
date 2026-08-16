@@ -1,33 +1,31 @@
-# Base image
+# Imagem única para os PRJ-01..PRJ-08 e o portal.
+#
+# O código NÃO é copiado: o docker-compose monta a raiz do monorepo em /app.
+# Assim uma edição no host vale na hora, sem rebuild — que é o que se quer
+# num ambiente de desenvolvimento.
 FROM python:3.12-slim
 
-# Prevent python from writing pyc files and buffering stdout/stderr
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies
+# build-essential é exigido por chromadb/sentence-transformers na instalação.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
-    software-properties-common \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Set work directory
 WORKDIR /app
 
-# Copy requirements from root (passed during build)
-COPY requirements.txt .
+# O contexto de build é esta pasta (docker/), não a raiz do monorepo.
+# Motivo: a raiz tem 13 GB e ~160 mil arquivos; mandar tudo para o daemon
+# fazia o build travar antes mesmo de começar a instalar qualquer coisa.
+# A imagem não precisa do código — ele chega por volume no compose.
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-# Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy common lib
-COPY INFRA/lib /app/INFRA/lib
-
-# Expose ports (FastAPI 8000, Streamlit 8501)
+# FastAPI e Streamlit; a porta real de cada serviço vem do compose.
 EXPOSE 8000
 EXPOSE 8501
 
-# Entry point will be defined in docker-compose per project
 CMD ["bash"]

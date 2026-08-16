@@ -79,19 +79,38 @@ html, body, [data-testid="stApp"] {
 """, unsafe_allow_html=True)
 
 # --- Helper functions ---
+def _repo_root() -> Path:
+    """
+    Raiz do monorepo, encontrada subindo a partir deste arquivo.
+
+    Antes os caminhos eram relativos fixos ('../../../REGISTRY'). Quando o
+    repositório foi reorganizado (DEV/ -> dev/rag/, REGISTRY -> shared/), o
+    portal parou de achar tudo e passou a exibir a tela vazia sem erro.
+    Procurar um marcador sobrevive a mudanças de profundidade.
+    """
+    atual = Path(__file__).resolve()
+    for pasta in atual.parents:
+        if (pasta / "shared" / "REGISTRY").is_dir():
+            return pasta
+    # Último recurso: dev/rag/PRJ-09_Deploy_Cloud/portal -> 4 níveis acima.
+    return atual.parents[4]
+
+
+REPO_ROOT = _repo_root()
+RAG_DIR = REPO_ROOT / "dev" / "rag"
+
+
 def load_projects():
-    for path in [
-        Path("../../../REGISTRY/projects.json"),
-        Path("REGISTRY/projects.json"),
-    ]:
-        if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
+    caminho = REPO_ROOT / "shared" / "REGISTRY" / "projects.json"
+    if caminho.exists():
+        return json.loads(caminho.read_text(encoding="utf-8"))
+    st.error(f"Registro de projetos não encontrado em {caminho}")
     return {"projetos": {}}
 
 def get_metrics():
     for path in [
-        Path("../../../INFRA/logs/rag_metrics.json"),
-        Path("INFRA/logs/rag_metrics.json"),
+        REPO_ROOT / "observability" / "reports" / "logs" / "rag_metrics.json",
+        REPO_ROOT / "INFRA" / "logs" / "rag_metrics.json",  # layout antigo
     ]:
         if path.exists():
             try:
@@ -118,8 +137,8 @@ def get_metrics():
     return []
 
 def load_snapshot(pid: str, filename: str) -> str | None:
-    pattern = f"../../../DEV/{pid}_*/project_context/{filename}"
-    found = next(Path(".").glob(pattern), None)
+    """Lê um documento de project_context/ do projeto (ex: PRJ-06 -> PRJ-06_GraphRAG)."""
+    found = next(RAG_DIR.glob(f"{pid}_*/project_context/{filename}"), None)
     if found:
         return found.read_text(encoding="utf-8")
     return None
@@ -139,12 +158,16 @@ def badge_html(status: str) -> str:
     cls   = cls_map.get(status, "badge-backlog")
     return f'<span class="badge {cls}">{label}</span>'
 
-# --- Port map ---
+# --- Port map (espelha as portas do docker-compose.yml) ---
 PORT_MAP = {
     "PRJ-01": 8501, "PRJ-02": 8502, "PRJ-03": 8503,
     "PRJ-04": 8504, "PRJ-05": 8505, "PRJ-06": 8506,
     "PRJ-07": 8507, "PRJ-08": 8508, "PRJ-09": 8500,
 }
+
+# Projetos que expõem uma API FastAPI além da interface. PRJ-05..08 acessam
+# o banco vetorial direto do Streamlit e não têm src/main.py.
+COM_API = {"PRJ-01", "PRJ-02", "PRJ-03", "PRJ-04"}
 
 # --- Load data ---
 data = load_projects()
@@ -265,8 +288,15 @@ if "selected_project" in st.session_state:
 
             st.divider()
             st.markdown("**Comando Docker para este projeto:**")
-            pid_lower = pid.lower().replace("-", "")
-            st.code(f"cd DEV/PRJ-09_Deploy_Cloud && docker-compose up {pid_lower}-api {pid_lower}-ui", language="bash")
+            # Os serviços do compose são 'prj-01-api'/'prj-01-ui'. Só PRJ-01..04
+            # têm API; os demais rodam apenas a interface Streamlit.
+            servicos = f"{pid.lower()}-ui"
+            if pid in COM_API:
+                servicos = f"{pid.lower()}-api {servicos}"
+            st.code(
+                f"cd dev/rag/PRJ-09_Deploy_Cloud && docker compose up -d {servicos}",
+                language="bash",
+            )
 
     with col_right:
         # --- Live App Access ---
@@ -276,7 +306,7 @@ if "selected_project" in st.session_state:
             f"http://localhost:{port}",
             use_container_width=True,
         )
-        st.caption(f"Suba o projeto antes de acessar: `streamlit run frontend/app.py --server.port {port}`")
+        st.caption(f"Suba o container antes de acessar (comando na aba Operação).")
 
         st.divider()
 

@@ -1,144 +1,264 @@
-version: '3.8'
+# PRJ-09 — Orquestração local do ecossistema RAG (PRJ-01..PRJ-08 + portal).
+#
+# Rodar a partir desta pasta:  docker compose up -d
+#
+# DECISÕES QUE EXPLICAM O ARQUIVO
+#
+# 1. O Ollama NÃO sobe em container. Ele já roda no host com dezenas de GB de
+#    modelos baixados; subir outro criaria conflito na porta 11434 e obrigaria
+#    a baixar tudo de novo. Os containers alcançam o host por
+#    host.docker.internal (o extra_hosts abaixo faz isso funcionar no Linux).
+#
+# 2. O código NÃO é copiado para a imagem: a raiz do monorepo é montada em
+#    /app. Editar no host vale na hora, sem rebuild.
+#
+# 3. As chaves de API vêm do .env de cada projeto via env_file. Elas não
+#    aparecem aqui nem entram na imagem, e seguem ignoradas pelo Git.
+#    O bloco 'environment' sobrepõe o env_file — é assim que trocamos
+#    localhost pelos nomes de serviço da rede Docker.
+#
+# 4. Portas das UIs (8501..8508) seguem o mapa que o portal já usa.
+
+x-base: &base
+  build:
+    # Contexto restrito a docker/: a raiz do monorepo tem 13 GB e ~160 mil
+    # arquivos, e enviá-la ao daemon travava o build indefinidamente.
+    # A imagem não precisa do código — ele chega pelo volume abaixo.
+    context: ./docker
+    dockerfile: Dockerfile
+  image: gare-rag:latest
+  volumes:
+    - ../../..:/app
+  networks:
+    - gare-network
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  restart: unless-stopped
+
+# OLLAMA_HOST é lido por PRJ-01..04; OLLAMA_BASE_URL por PRJ-05..08.
+# PYTHONPATH=/app: PRJ-07 e PRJ-08 importam shared.infra.lib.observatory,
+# que vive na raiz do monorepo (montada em /app), não na pasta do projeto.
+x-ollama: &ollama-env
+  OLLAMA_HOST: http://host.docker.internal:11434
+  OLLAMA_BASE_URL: http://host.docker.internal:11434
+  PYTHONPATH: /app
 
 services:
-  # --- Core Infrastructure ---
-  
-  ollama:
-    image: ollama/ollama:latest
-    container_name: gare-ollama
-    volumes:
-      - ollama_data:/root/.ollama
-    ports:
-      - "11434:11434"
-    networks:
-      - gare-network
-    restart: unless-stopped
+
+  # ──────────────────────────── Infraestrutura ────────────────────────────
 
   redis:
-    image: redis:alpine
+    image: redis:7-alpine
     container_name: gare-redis
     ports:
-      - "6380:6379" # Using 6380 as per project standards
+      - "6380:6379"   # 6380 no host é o padrão do ecossistema
     networks:
       - gare-network
     restart: unless-stopped
 
   neo4j:
-    image: neo4j:latest
+    image: neo4j:5.18.0
     container_name: gare-neo4j
     ports:
       - "7474:7474"
       - "7687:7687"
     environment:
-      - NEO4J_AUTH=neo4j/password
+      NEO4J_AUTH: neo4j/password123
+      # APOC é requisito do GraphRAG (PRJ-06).
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_apoc_export_file_enabled: "true"
+      NEO4J_apoc_import_file_enabled: "true"
     volumes:
       - neo4j_data:/data
     networks:
       - gare-network
     restart: unless-stopped
 
-  # --- Project 02: Memória RAG (Redis) ---
+  # ─────────────────────── PRJ-01 — Vanilla RAG ───────────────────────────
+
+  prj-01-api:
+    <<: *base
+    container_name: gare-prj01-api
+    working_dir: /app/dev/rag/PRJ-01_Vanilla_RAG
+    env_file: ../PRJ-01_Vanilla_RAG/.env
+    environment:
+      <<: *ollama-env
+    ports:
+      - "8001:8000"
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000
+
+  prj-01-ui:
+    <<: *base
+    container_name: gare-prj01-ui
+    working_dir: /app/dev/rag/PRJ-01_Vanilla_RAG
+    env_file: ../PRJ-01_Vanilla_RAG/.env
+    environment:
+      <<: *ollama-env
+      API_URL: http://prj-01-api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - prj-01-api
+    command: streamlit run frontend/streamlit_app.py --server.port 8501 --server.address 0.0.0.0
+
+  # ─────────────────────── PRJ-02 — Memory RAG ────────────────────────────
+
   prj-02-api:
-    build:
-      context: ../..
-      dockerfile: DEV/PRJ-09_Deploy_Cloud/docker/Dockerfile
+    <<: *base
     container_name: gare-prj02-api
-    working_dir: /app/DEV/PRJ-02_Memoria_RAG
-    volumes:
-      - ../..:/app
+    working_dir: /app/dev/rag/PRJ-02_Memory_RAG
+    env_file: ../PRJ-02_Memory_RAG/.env
+    environment:
+      <<: *ollama-env
+      REDIS_URL: redis://redis:6379
     ports:
       - "8002:8000"
-    environment:
-      - OLLAMA_HOST=http://ollama:11434
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
     depends_on:
-      - ollama
       - redis
     command: uvicorn src.main:app --host 0.0.0.0 --port 8000
-    networks:
-      - gare-network
 
   prj-02-ui:
-    build:
-      context: ../..
-      dockerfile: DEV/PRJ-09_Deploy_Cloud/docker/Dockerfile
+    <<: *base
     container_name: gare-prj02-ui
-    working_dir: /app/DEV/PRJ-02_Memoria_RAG
-    volumes:
-      - ../..:/app
-    ports:
-      - "8502:8502"
+    working_dir: /app/dev/rag/PRJ-02_Memory_RAG
+    env_file: ../PRJ-02_Memory_RAG/.env
     environment:
-      - API_URL=http://prj-02-api:8000
+      <<: *ollama-env
+      API_URL: http://prj-02-api:8000
+    ports:
+      - "8502:8501"
     depends_on:
       - prj-02-api
-    command: streamlit run frontend/streamlit_app.py --server.port 8502 --server.address 0.0.0.0
-    networks:
-      - gare-network
+    command: streamlit run frontend/streamlit_app.py --server.port 8501 --server.address 0.0.0.0
 
-  # --- Project 03: Agentic RAG ---
+  # ─────────────────────── PRJ-03 — Agentic RAG ───────────────────────────
+
   prj-03-api:
-    build:
-      context: ../..
-      dockerfile: DEV/PRJ-09_Deploy_Cloud/docker/Dockerfile
+    <<: *base
     container_name: gare-prj03-api
-    working_dir: /app/DEV/PRJ-03_Agentic_RAG
-    volumes:
-      - ../..:/app
+    working_dir: /app/dev/rag/PRJ-03_Agentic_RAG
+    env_file: ../PRJ-03_Agentic_RAG/.env
+    environment:
+      <<: *ollama-env
+      REDIS_URL: redis://redis:6379
     ports:
       - "8003:8000"
-    environment:
-      - OLLAMA_HOST=http://ollama:11434
     depends_on:
-      - ollama
+      - redis
     command: uvicorn src.main:app --host 0.0.0.0 --port 8000
-    networks:
-      - gare-network
 
-  # --- Project 06: GraphRAG (Neo4j) ---
-  prj-06-api:
-    build:
-      context: ../..
-      dockerfile: DEV/PRJ-09_Deploy_Cloud/docker/Dockerfile
-    container_name: gare-prj06-api
-    working_dir: /app/DEV/PRJ-06_GraphRAG
-    volumes:
-      - ../..:/app
-    ports:
-      - "8006:8000"
+  prj-03-ui:
+    <<: *base
+    container_name: gare-prj03-ui
+    working_dir: /app/dev/rag/PRJ-03_Agentic_RAG
+    env_file: ../PRJ-03_Agentic_RAG/.env
     environment:
-      - OLLAMA_HOST=http://ollama:11434
-      - NEO4J_URI=bolt://neo4j:7687
-      - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=password
+      <<: *ollama-env
+      API_URL: http://prj-03-api:8000
+    ports:
+      - "8503:8501"
     depends_on:
-      - ollama
+      - prj-03-api
+    command: streamlit run frontend/streamlit_app.py --server.port 8501 --server.address 0.0.0.0
+
+  # ────────────────────── PRJ-04 — Corrective RAG ─────────────────────────
+
+  prj-04-api:
+    <<: *base
+    container_name: gare-prj04-api
+    working_dir: /app/dev/rag/PRJ-04_Corrective_RAG
+    env_file: ../PRJ-04_Corrective_RAG/.env
+    environment:
+      <<: *ollama-env
+    ports:
+      - "8004:8000"
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000
+
+  prj-04-ui:
+    <<: *base
+    container_name: gare-prj04-ui
+    working_dir: /app/dev/rag/PRJ-04_Corrective_RAG
+    env_file: ../PRJ-04_Corrective_RAG/.env
+    environment:
+      <<: *ollama-env
+      API_URL: http://prj-04-api:8000
+    ports:
+      - "8504:8501"
+    depends_on:
+      - prj-04-api
+    # app.py é o frontend que lê API_URL do ambiente (streamlit_app.py não lê).
+    command: streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
+
+  # ── PRJ-05, 07, 08 — só Streamlit, acessam o Chroma direto (sem API) ────
+
+  prj-05-ui:
+    <<: *base
+    container_name: gare-prj05-ui
+    working_dir: /app/dev/rag/PRJ-05_Adaptive_RAG
+    env_file: ../PRJ-05_Adaptive_RAG/.env
+    environment:
+      <<: *ollama-env
+    ports:
+      - "8505:8501"
+    command: streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
+
+  prj-07-ui:
+    <<: *base
+    container_name: gare-prj07-ui
+    working_dir: /app/dev/rag/PRJ-07_Hybrid_RAG
+    env_file: ../PRJ-07_Hybrid_RAG/.env
+    environment:
+      <<: *ollama-env
+    ports:
+      - "8507:8501"
+    command: streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
+
+  prj-08-ui:
+    <<: *base
+    container_name: gare-prj08-ui
+    working_dir: /app/dev/rag/PRJ-08_HyDE_RAG
+    env_file: ../PRJ-08_HyDE_RAG/.env
+    environment:
+      <<: *ollama-env
+    ports:
+      - "8508:8501"
+    command: streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
+
+  # ───────────────────────── PRJ-06 — GraphRAG ────────────────────────────
+  # Só Streamlit: este projeto não tem API. O compose antigo tentava rodar
+  # 'uvicorn src.main:app' aqui, arquivo que nunca existiu.
+
+  prj-06-ui:
+    <<: *base
+    container_name: gare-prj06-ui
+    working_dir: /app/dev/rag/PRJ-06_GraphRAG
+    env_file: ../PRJ-06_GraphRAG/.env
+    environment:
+      <<: *ollama-env
+      NEO4J_URI: bolt://neo4j:7687
+      # O código lê NEO4J_USERNAME. O compose antigo passava NEO4J_USER e
+      # a conexão só funcionava por acaso, pelo valor padrão.
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: password123
+    ports:
+      - "8506:8501"
+    depends_on:
       - neo4j
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000
-    networks:
-      - gare-network
+    command: streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
 
-  # --- Portal GIULIA AI ---
+  # ──────────────────────────── Portal ────────────────────────────────────
+
   portal:
-    build:
-      context: ../..
-      dockerfile: DEV/PRJ-09_Deploy_Cloud/docker/Dockerfile
+    <<: *base
     container_name: gare-portal
-    working_dir: /app/DEV/PRJ-09_Deploy_Cloud/portal
-    volumes:
-      - ../..:/app
+    working_dir: /app/dev/rag/PRJ-09_Deploy_Cloud/portal
     ports:
-      - "8500:8500"
-    command: streamlit run portal_app.py --server.port 8500 --server.address 0.0.0.0
-    networks:
-      - gare-network
+      - "8500:8501"
+    command: streamlit run portal_app.py --server.port 8501 --server.address 0.0.0.0
 
 networks:
   gare-network:
     driver: bridge
 
 volumes:
-  ollama_data:
   neo4j_data:
-  redis_data:
